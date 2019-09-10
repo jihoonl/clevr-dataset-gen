@@ -108,12 +108,12 @@ parser.add_argument(
     help="The maximum number of objects to place in each scene")
 parser.add_argument(
     '--min_dist',
-    default=0.25,
+    default=0.1,
     type=float,
     help="The minimum allowed distance between object centers")
 parser.add_argument(
     '--margin',
-    default=0.4,
+    default=0.1,
     type=float,
     help="Along all cardinal directions (left, right, front, back), all " +
     "objects will be at least this distance apart. This makes resolving " +
@@ -327,6 +327,10 @@ def render_scene(args,
 
         for (b, c) in blender_objects:
             utils.delete_object(b)
+
+        utils.delete_object(bpy.data.objects['Lamp_Key'])
+        utils.delete_object(bpy.data.objects['Lamp_Back'])
+        utils.delete_object(bpy.data.objects['Lamp_Fill'])
 
         mat = bpy.data.materials.new(name="MaterialName")
         mat.diffuse_color = (0, 0, 0)
