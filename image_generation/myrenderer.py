@@ -290,13 +290,14 @@ def render_scene(args,
 
     success = False
     objects = []
+    blender_objects = []
     while not success:
-        success, objects = add_objects(args, num_objects, directions,
-                                       properties)
-
+        success, objects, blender_objects = add_objects(args, num_objects,
+                                                        directions, properties)
     scene_struct = {'objects': deepcopy(objects), 'directions': directions}
     for o in scene_struct['objects']:
         o['location'] = tuple(o['location'])
+        o['bbox'] = [b.to_tuple() for b in o['bbox']]
     with open(str(scene_root / scene_path), 'w') as f:
         json.dump(scene_struct, f)
 
@@ -307,26 +308,65 @@ def render_scene(args,
         imgname = '{}.png'.format(i)
         meta = '{}.json'.format(i)
         objs_export = deepcopy(objects)
-
         camera = bpy.data.objects['Camera']
-        for i in range(3):
-            camera.location[i] += rand(args.camera_jitter)
+        # for i in range(3):
+        #    camera.location[i] += rand(args.camera_jitter)
 
         # Record data about the object in the scene data structure
         for o in objs_export:
             pixel_coords = utils.get_camera_coords(camera, o['location'])
+            pixel_bbox = utils.get_pixel_bbox(camera, o['bbox'])
             o['location'] = tuple(o['location'])
             o['pixel_coords'] = pixel_coords
+            o['pixel_bbox'] = pixel_bbox
+            o['bbox'] = [b.to_tuple() for b in o['bbox']]
+        filepath = str(scene_root / '{}'.format(imgname))
+        render_single(render_args, filepath)
 
-        render_args.filepath = str(scene_root / imgname)
-        while True:
-            try:
-                bpy.ops.render.render(write_still=True)
-                break
-            except Exception as e:
-                print(e)
+        for t in ['full', 'cube', 'sphere', 'cylinder']:
+            print(t)
+            to_omit = []
+            for b, o in zip(blender_objects, objs_export):
+                if o['shape'] == t:
+                    to_omit.append(b)
+            filepath = str(scene_root / '{}_{}'.format(t, imgname))
+
+            mat = bpy.data.materials.new(name="MaterialName")
+            mat.diffuse_color = (0, 0, 0)
+            mat.diffuse_intensity = 0.0
+            mat.ambient = 0.0
+
+            for ob in bpy.data.objects:
+                try:
+                    ob.cycles_visibility.shadow = 0
+                    ob.data.materials[0] = mat
+                except:
+                    print("No shadows: ", ob.name)
+            bpy.data.worlds['World'].cycles.sample_as_light = False
+            bpy.context.scene.cycles.blur_glossy = 10
+            bpy.context.scene.cycles.transparent_min_bounces = 0
+            bpy.context.scene.cycles.transparent_max_bounces = 0
+            bpy.context.scene.update_tag()
+
+            render_single(render_args, filepath, to_omit)
+
         with open(str(scene_root / meta), 'w') as f:
-            json.dump(o, f, indent=2)
+            json.dump(objs_export, f, indent=2)
+
+
+def render_single(render_args, filepath, to_omit=[]):
+    for b, c in to_omit:
+        utils.delete_object(b)
+
+    render_args.filepath = filepath
+    while True:
+        try:
+            bpy.ops.render.render(write_still=True)
+            break
+        except Exception as e:
+            print(e)
+    for b, c in to_omit:
+        utils.add_object(*c)
 
 
 def add_objects(args, num_objects, directions, properties):
@@ -345,7 +385,7 @@ def add_objects(args, num_objects, directions, properties):
             # the objects in the scene and start over.
             num_tries += 1
             if num_tries > args.max_retries:
-                for obj in blender_objects:
+                for (obj, c) in blender_objects:
                     utils.delete_object(obj)
                 return False, objects
 
@@ -354,14 +394,15 @@ def add_objects(args, num_objects, directions, properties):
                 continue
 
             # Actually add the object to the scene
-            utils.add_object(args.shape_dir, data['obj'][0], data['size'][0],
-                             data['coord'], data['rotation'])
+            config = (args.shape_dir, data['obj'][0], data['size'][0],
+                      data['coord'], data['rotation'], data['mat'][0],
+                      data['color'][0])
+            utils.add_object(*config)
             obj = bpy.context.object
-            blender_objects.append(obj)
+            obj_boundbox, obj_cylinder = world_coordinate_bbox(
+                obj, data['obj'][1])
+            blender_objects.append((obj, config))
             positions.append((*data['coord'], data['size'][0]))
-
-            # Attach a random material
-            utils.add_material(data['mat'][0], Color=data['color'][0])
 
             # Add object meta info
             objects.append(
@@ -371,9 +412,41 @@ def add_objects(args, num_objects, directions, properties):
                     material=data['mat'][1],
                     location=obj.location,
                     rotation=data['rotation'],
+                    bbox=obj_boundbox,
+                    cylinder=obj_cylinder,
                     color=data['color'][1]))
             break
-    return True, objects
+    return True, objects, blender_objects
+
+
+def world_coordinate_bbox(obj, obj_type, local=False):
+    """
+    from https://blender.stackexchange.com/questions/32283/what-are-all-values-in-bound-box
+    """
+    local_coords = obj.bound_box[:]
+    location = obj.location
+    print(location)
+    om = obj.matrix_world
+
+    worldify = lambda p: om * Vector(p[:])
+    world_coords = [worldify(p) for p in local_coords]
+    print(world_coords)
+    vs = [Vector(p[:]) for p in local_coords]
+
+    bbox_z = (vs[1] - vs[0]).z
+    bbox_x = (vs[4] - vs[0]).x
+    bbox_y = (vs[3] - vs[0]).y
+
+    if obj_type in ['cylinder', 'sphere']:
+        # Circle type
+        radius = bbox_x / 2
+        height = bbox_z
+    else:
+        # Cube type
+        radius = math.sqrt(bbox_x**2 + bbox_y**2)
+        height = bbox_z
+
+    return world_coords, (radius, height)
 
 
 def add_single_object(positions, directions, color_name_to_rgba,
@@ -422,9 +495,9 @@ def add_single_object(positions, directions, color_name_to_rgba,
     # For cube, adjust the size a bit
     if obj_name == 'Cube':
         scale /= math.sqrt(2)
+    theta = 360.0 * random.random()
 
     # Choose random orientation for the object.
-    theta = 360.0 * random.random()
 
     # Attach a random material
     mat_name, mat_name_out = random.choice(material_mapping)
@@ -506,6 +579,8 @@ def prepare_world(args):
     render_args.resolution_percentage = 100
     render_args.tile_x = args.render_tile_size
     render_args.tile_y = args.render_tile_size
+    render_args.layers[0].use_pass_vector = True
+
     if args.use_gpu == 1:
         # Blender changed the API for enabling CUDA at some point
         if bpy.app.version < (2, 78, 0):
