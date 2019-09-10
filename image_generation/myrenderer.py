@@ -7,6 +7,7 @@
 
 from __future__ import print_function
 
+import operator
 import argparse
 import json
 import math
@@ -304,15 +305,15 @@ def render_scene(args,
     if args.export_blend:
         bpy.ops.wm.save_as_mainfile(filepath=str(scene_root / blender_path))
 
-    for i in range(num_images):
-        imgname = '{}.png'.format(i)
-        meta = '{}.json'.format(i)
+    for img_idx in range(num_images):
+        meta = '{}.json'.format(img_idx)
         objs_export = deepcopy(objects)
         camera = bpy.data.objects['Camera']
         # for i in range(3):
         #    camera.location[i] += rand(args.camera_jitter)
 
         # Record data about the object in the scene data structure
+        z_depth = []
         for o in objs_export:
             pixel_coords = utils.get_camera_coords(camera, o['location'])
             pixel_bbox = utils.get_pixel_bbox(camera, o['bbox'])
@@ -320,43 +321,56 @@ def render_scene(args,
             o['pixel_coords'] = pixel_coords
             o['pixel_bbox'] = pixel_bbox
             o['bbox'] = [b.to_tuple() for b in o['bbox']]
-        filepath = str(scene_root / '{}'.format(imgname))
+            z_depth.append(pixel_coords[2])
+        filepath = str(scene_root / '{}.png'.format(img_idx))
         render_single(render_args, filepath)
 
-        for t in ['full', 'cube', 'sphere', 'cylinder']:
-            print(t)
-            to_omit = []
-            for b, o in zip(blender_objects, objs_export):
-                if o['shape'] == t:
-                    to_omit.append(b)
-            filepath = str(scene_root / '{}_{}'.format(t, imgname))
+        for (b, c) in blender_objects:
+            utils.delete_object(b)
 
-            mat = bpy.data.materials.new(name="MaterialName")
-            mat.diffuse_color = (0, 0, 0)
-            mat.diffuse_intensity = 0.0
-            mat.ambient = 0.0
+        mat = bpy.data.materials.new(name="MaterialName")
+        mat.diffuse_color = (0, 0, 0)
+        mat.diffuse_intensity = 0.0
+        mat.ambient = 0.0
+        for ob in bpy.data.objects:
+            try:
+                ob.cycles_visibility.shadow = 0
+                ob.data.materials[0] = mat
+            except:
+                print("No shadows: ", ob.name)
 
-            for ob in bpy.data.objects:
-                try:
-                    ob.cycles_visibility.shadow = 0
-                    ob.data.materials[0] = mat
-                except:
-                    print("No shadows: ", ob.name)
+        # Empty floor
+        filepath = str(scene_root / '{}_{}.png'.format(img_idx, 0))
+        render_single(render_args, filepath)
+
+        objs = list(zip(blender_objects, objs_export, z_depth))
+        objs.sort(key=operator.itemgetter(2))
+
+        for obj_idx, ((b, c), o, z) in enumerate(objs):
+            utils.add_object(*c)
+            obj = bpy.context.object
+            filepath = str(
+                scene_root / '{}_{}.png'.format(img_idx, obj_idx + 1))
+            print(filepath)
+
+            obj.cycles_visibility.shadow = 0
+            obj.data.materials[0] = mat
             bpy.data.worlds['World'].cycles.sample_as_light = False
             bpy.context.scene.cycles.blur_glossy = 10
             bpy.context.scene.cycles.transparent_min_bounces = 0
             bpy.context.scene.cycles.transparent_max_bounces = 0
             bpy.context.scene.update_tag()
 
-            render_single(render_args, filepath, to_omit)
+            render_single(render_args, filepath)
+            utils.delete_object(obj)
 
         with open(str(scene_root / meta), 'w') as f:
             json.dump(objs_export, f, indent=2)
 
 
-def render_single(render_args, filepath, to_omit=[]):
-    for b, c in to_omit:
-        utils.delete_object(b)
+def render_single(render_args, filepath, to_add=[]):
+    for b, c in to_add:
+        utils.add_object(*c)
 
     render_args.filepath = filepath
     while True:
@@ -365,8 +379,8 @@ def render_single(render_args, filepath, to_omit=[]):
             break
         except Exception as e:
             print(e)
-    for b, c in to_omit:
-        utils.add_object(*c)
+    for b, c in to_add:
+        utils.delete_object(b)
 
 
 def add_objects(args, num_objects, directions, properties):
