@@ -69,6 +69,7 @@ def get_camera_coords(cam, pos):
   """
     scene = bpy.context.scene
     x, y, z = bpy_extras.object_utils.world_to_camera_view(scene, cam, pos)
+    bpy.context.scene.update_tag()
     scale = scene.render.resolution_percentage / 100.0
     w = int(scale * scene.render.resolution_x)
     h = int(scale * scene.render.resolution_y)

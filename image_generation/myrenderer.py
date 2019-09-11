@@ -9,6 +9,7 @@
 
 from __future__ import print_function
 
+import numpy as np
 import operator
 import argparse
 import json
@@ -91,7 +92,7 @@ parser.add_argument(
     "for CLEVR-CoGenT.")
 
 # Settings for images
-parser.add_argument('--num_images',
+parser.add_argument('--sequence_length',
                     default=1,
                     type=int,
                     help="The maximum number of images to place in each scene")
@@ -237,10 +238,10 @@ def main(args):
         scene_root.mkdir(exist_ok=True)
 
         num_objects = random.randint(args.min_objects, args.max_objects)
-        num_images = args.num_images
+        sequence_length = args.sequence_length
         render_scene(args,
                      num_objects=num_objects,
-                     num_images=num_images,
+                     sequence_length=sequence_length,
                      scene_root=scene_root,
                      properties=properties)
 
@@ -251,13 +252,17 @@ def rand(L):
 
 def render_scene(args,
                  num_objects=1,
-                 num_images=1,
+                 sequence_length=1,
                  scene_root='.',
                  properties=None):
     scene_path = 'scene.json'
     blender_path = 'scene.blend'
 
     # Prepare blender world
+
+    ################
+    # Generate Scene
+    ################
     render_args = prepare_world(args)
 
     # Add random jitter to lamp positions
@@ -280,84 +285,127 @@ def render_scene(args,
     if args.export_blend:
         bpy.ops.wm.save_as_mainfile(filepath=str(scene_root / blender_path))
 
-    for img_idx in range(num_images):
+    for obj in bpy.data.objects:
+        print(obj.name)
+
+    ##################
+    # Generate camera views
+    # adopted from https://github.com/loganbruns/clevr-dataset-gen
+    ##################
+    r = np.linalg.norm([
+        bpy.data.objects['Camera'].location.x,
+        bpy.data.objects['Camera'].location.y
+    ])
+
+    delta_radians = 2 * np.pi / sequence_length
+    theta = 0.
+
+    # Record data about the object in the scene data structure
+    for img_idx in range(sequence_length):
         meta = '{}.json'.format(img_idx)
         objs_export = deepcopy(objects)
         camera = bpy.data.objects['Camera']
-        # for i in range(3):
-        #    camera.location[i] += rand(args.camera_jitter)
+        bpy.data.objects['Camera'].location.x = r * np.cos(theta)
+        bpy.data.objects['Camera'].location.y = r * np.sin(theta)
+        bpy.data.objects['Camera'].rotation_euler.z += delta_radians
+        for i in range(3):
+            camera.location[i] += rand(args.camera_jitter)
 
-        # Record data about the object in the scene data structure
-        z_depth = []
-        for o in objs_export:
-            pixel_coords = utils.get_camera_coords(camera, o['location'])
-            o['location'] = tuple(o['location'])
-            o['pixel_coords'] = pixel_coords
-            o['bbox'] = [b.to_tuple() for b in o['bbox']]
-            z_depth.append(pixel_coords[2])
+        theta += delta_radians
+        bpy.context.scene.update_tag()
         filepath = str(scene_root / '{}.png'.format(img_idx))
         render_single(render_args, filepath)
 
-        for (b, c) in blender_objects:
-            utils.delete_object(b)
+        for o in objs_export:
+            pixel_coords = utils.get_camera_coords(bpy.data.objects['Camera'],
+                                                   o['location'])
+            o['location'] = tuple(o['location'])
+            o['pixel_coords'] = pixel_coords
+            o['bbox'] = [b.to_tuple() for b in o['bbox']]
+        objs_export.sort(key=lambda o: o['pixel_coords'][2])
 
-        utils.delete_object(bpy.data.objects['Lamp_Key'])
-        utils.delete_object(bpy.data.objects['Lamp_Back'])
-        utils.delete_object(bpy.data.objects['Lamp_Fill'])
+        export = {}
+        export['objects'] = objs_export
+        export['camera'] = {}
+        export['camera']['location'] = [
+            bpy.data.objects['Camera'].location.x,
+            bpy.data.objects['Camera'].location.y,
+            bpy.data.objects['Camera'].location.z
+        ]
+        export['camera']['rotation'] = [
+            bpy.data.objects['Camera'].rotation_euler.x,
+            bpy.data.objects['Camera'].rotation_euler.y,
+            bpy.data.objects['Camera'].rotation_euler.z,
+        ]
 
-        mat = bpy.data.materials.new(name="MaterialName")
-        mat.diffuse_color = (0, 0, 0)
-        mat.diffuse_intensity = 0.0
-        mat.ambient = 0.0
-        for ob in bpy.data.objects:
-            try:
-                ob.cycles_visibility.shadow = 0
-                ob.data.materials[0] = mat
-            except:
-                print("No shadows: ", ob.name)
-
-        # Empty floor
-        filepath = str(scene_root / '{}_{}.png'.format(img_idx, 0))
-        render_single(render_args, filepath)
-
-        objs = list(zip(blender_objects, objs_export, z_depth))
-        objs.sort(key=operator.itemgetter(2))
-
-        for obj_idx, ((b, c), o, z) in enumerate(objs):
-            utils.add_object(*c)
-            obj = bpy.context.object
-            filepath = str(scene_root /
-                           '{}_{}.png'.format(img_idx, obj_idx + 1))
-            print(filepath)
-
-            obj.cycles_visibility.shadow = 0
-            obj.data.materials[0] = mat
-            bpy.data.worlds['World'].cycles.sample_as_light = False
-            bpy.context.scene.cycles.blur_glossy = 10
-            bpy.context.scene.cycles.transparent_min_bounces = 0
-            bpy.context.scene.cycles.transparent_max_bounces = 0
-            bpy.context.scene.update_tag()
-
-            render_single(render_args, filepath)
-            utils.delete_object(obj)
-
+        colormap = render_masks(scene_root, img_idx, render_args, objs_export,
+                     blender_objects)
+        export['colormap'] = colormap.tolist()
         with open(str(scene_root / meta), 'w') as f:
-            json.dump(objs_export, f, indent=2)
+            json.dump(export, f, indent=2)
 
 
-def render_single(render_args, filepath, to_add=[]):
-    for b, c in to_add:
-        utils.add_object(*c)
+def render_masks(scene_root, img_idx, render_args, objs_export,
+                 blender_objects):
+    # Keep the original configuration
+    # And prepare shadeless rendering to extract mask easier
+    old_engine = render_args.engine
+    old_use_antialiasing = render_args.use_antialiasing
+    render_args.engine = 'BLENDER_RENDER'
+    render_args.use_antialiasing = False
+    utils.set_layer(bpy.data.objects['Lamp_Key'], 2)
+    utils.set_layer(bpy.data.objects['Lamp_Back'], 2)
+    utils.set_layer(bpy.data.objects['Lamp_Fill'], 2)
+    utils.set_layer(bpy.data.objects['Ground'], 2)
 
+    # Assign colors for each objects
+    num_objs = len(objs_export)
+    colormap = np.power(np.linspace(0, 1, num_objs + 2)[1:-1],
+                        2.2)  # To skip 0, and 255
+    old_materials = []
+
+    z_depth = []
+    for o in objs_export:
+        z_depth.append(o['pixel_coords'][2])
+    z_sorted_objs = list(zip(blender_objects, z_depth))
+    z_sorted_objs.sort(key=operator.itemgetter(1))
+
+    for i, ((obj, c), z) in enumerate(z_sorted_objs):
+        old_materials.append(obj.data.materials[0])
+        bpy.ops.material.new()
+        mat = bpy.data.materials['Material']
+        mat.name = 'Material_%d' % i
+        mat.diffuse_color = (colormap[i], colormap[i], colormap[i])
+        mat.use_shadeless = True
+        obj.data.materials[0] = mat
+    bpy.context.scene.update_tag()
+
+    # Render
+    filepath = str(scene_root / '{}_{}.png'.format(img_idx, 'mask'))
+    render_single(render_args, filepath)
+
+    # Revert all changes back to original
+    for mat, (obj, c) in zip(old_materials, blender_objects):
+        obj.data.materials[0] = mat
+    utils.set_layer(bpy.data.objects['Lamp_Key'], 0)
+    utils.set_layer(bpy.data.objects['Lamp_Back'], 0)
+    utils.set_layer(bpy.data.objects['Lamp_Fill'], 0)
+    utils.set_layer(bpy.data.objects['Ground'], 0)
+    render_args.engine = old_engine
+    render_args.use_antialiasing = old_use_antialiasing
+    bpy.context.scene.update_tag()
+    return colormap
+
+
+def render_single(render_args, filepath):
     render_args.filepath = filepath
+
     while True:
         try:
             bpy.ops.render.render(write_still=True)
             break
         except Exception as e:
             print(e)
-    for b, c in to_add:
-        utils.delete_object(b)
 
 
 def add_objects(args, num_objects, directions, properties):
@@ -415,12 +463,10 @@ def world_coordinate_bbox(obj, obj_type, local=False):
     """
     local_coords = obj.bound_box[:]
     location = obj.location
-    print(location)
     om = obj.matrix_world
 
     worldify = lambda p: om * Vector(p[:])
     world_coords = [worldify(p) for p in local_coords]
-    print(world_coords)
     vs = [Vector(p[:]) for p in local_coords]
 
     bbox_z = (vs[1] - vs[0]).z

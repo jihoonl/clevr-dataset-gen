@@ -17,7 +17,7 @@ Code and pretrained models for the baselines used in the paper [can be found her
 
 # Update Notes
 
-The original code has been updated to generate object masks and center pose of objects like this. You can use this code to generate synthetic dataset for context based object detection and semantic 
+The original code has been updated to generate object masks and center pose of objects like this. You can use this code to generate synthetic dataset for context based object detection and segmentation tasks
 
 <div align="center">
   <img src="images/example_mask.png" width="800px">
