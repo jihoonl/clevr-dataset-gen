@@ -5,6 +5,8 @@
 # LICENSE file in the root directory of this source tree. An additional grant
 # of patent rights can be found in the PATENTS file in the same directory.
 
+# Modified by Jihoon Lee, KakaoBrain
+
 from __future__ import print_function
 
 import operator
@@ -89,28 +91,24 @@ parser.add_argument(
     "for CLEVR-CoGenT.")
 
 # Settings for images
-parser.add_argument(
-    '--num_images',
-    default=1,
-    type=int,
-    help="The maximum number of images to place in each scene")
+parser.add_argument('--num_images',
+                    default=1,
+                    type=int,
+                    help="The maximum number of images to place in each scene")
 
 # Settings for objects
-parser.add_argument(
-    '--min_objects',
-    default=3,
-    type=int,
-    help="The minimum number of objects to place in each scene")
-parser.add_argument(
-    '--max_objects',
-    default=3,
-    type=int,
-    help="The maximum number of objects to place in each scene")
-parser.add_argument(
-    '--min_dist',
-    default=0.1,
-    type=float,
-    help="The minimum allowed distance between object centers")
+parser.add_argument('--min_objects',
+                    default=3,
+                    type=int,
+                    help="The minimum number of objects to place in each scene")
+parser.add_argument('--max_objects',
+                    default=3,
+                    type=int,
+                    help="The maximum number of objects to place in each scene")
+parser.add_argument('--min_dist',
+                    default=0.1,
+                    type=float,
+                    help="The minimum allowed distance between object centers")
 parser.add_argument(
     '--margin',
     default=0.1,
@@ -140,8 +138,10 @@ parser.add_argument(
     help="The index at which to start for numbering rendered images. Setting " +
     "this to non-zero values allows you to distribute rendering across " +
     "multiple machines and recombine the results later.")
-parser.add_argument(
-    '--num_scenes', default=1, type=int, help="The number of scenes to render")
+parser.add_argument('--num_scenes',
+                    default=1,
+                    type=int,
+                    help="The number of scenes to render")
 parser.add_argument(
     '--filename_prefix',
     default='CLEVR',
@@ -176,16 +176,14 @@ parser.add_argument(
     help="Setting --use_gpu 1 enables GPU-accelerated rendering using CUDA. " +
     "You must have an NVIDIA GPU with the CUDA toolkit installed for " +
     "to work.")
-parser.add_argument(
-    '--width',
-    default=240,
-    type=int,
-    help="The width (in pixels) for the rendered images")
-parser.add_argument(
-    '--height',
-    default=240,
-    type=int,
-    help="The height (in pixels) for the rendered images")
+parser.add_argument('--width',
+                    default=240,
+                    type=int,
+                    help="The width (in pixels) for the rendered images")
+parser.add_argument('--height',
+                    default=240,
+                    type=int,
+                    help="The height (in pixels) for the rendered images")
 parser.add_argument(
     '--key_light_jitter',
     default=1.0,
@@ -212,16 +210,14 @@ parser.add_argument(
     type=int,
     help="The number of samples to use when rendering. Larger values will " +
     "result in nicer images but will cause rendering to take longer.")
-parser.add_argument(
-    '--render_min_bounces',
-    default=8,
-    type=int,
-    help="The minimum number of bounces to use for rendering.")
-parser.add_argument(
-    '--render_max_bounces',
-    default=8,
-    type=int,
-    help="The maximum number of bounces to use for rendering.")
+parser.add_argument('--render_min_bounces',
+                    default=8,
+                    type=int,
+                    help="The minimum number of bounces to use for rendering.")
+parser.add_argument('--render_max_bounces',
+                    default=8,
+                    type=int,
+                    help="The maximum number of bounces to use for rendering.")
 parser.add_argument(
     '--render_tile_size',
     default=256,
@@ -242,32 +238,11 @@ def main(args):
 
         num_objects = random.randint(args.min_objects, args.max_objects)
         num_images = args.num_images
-        render_scene(
-            args,
-            num_objects=num_objects,
-            num_images=num_images,
-            scene_root=scene_root,
-            properties=properties)
-
-    # After rendering all images, combine the JSON files for each scene into a
-    # single JSON file.
-    """
-    all_scenes = []
-    for scene_path in all_scene_paths:
-        with open(str(scene_path), 'r') as f:
-            all_scenes.append(json.load(f))
-    output = {
-        'info': {
-            'date': args.date,
-            'version': args.version,
-            'split': args.split,
-            'license': args.license,
-        },
-        'scenes': all_scenes
-    }
-    with open(args.output_scene_file, 'w') as f:
-        json.dump(output, f)
-    """
+        render_scene(args,
+                     num_objects=num_objects,
+                     num_images=num_images,
+                     scene_root=scene_root,
+                     properties=properties)
 
 
 def rand(L):
@@ -286,7 +261,7 @@ def render_scene(args,
     render_args = prepare_world(args)
 
     # Add random jitter to lamp positions
-    # add_lamp_jitter(args)
+    add_lamp_jitter(args)
     directions = prepare_plane()
 
     success = False
@@ -316,10 +291,8 @@ def render_scene(args,
         z_depth = []
         for o in objs_export:
             pixel_coords = utils.get_camera_coords(camera, o['location'])
-            pixel_bbox = utils.get_pixel_bbox(camera, o['bbox'])
             o['location'] = tuple(o['location'])
             o['pixel_coords'] = pixel_coords
-            o['pixel_bbox'] = pixel_bbox
             o['bbox'] = [b.to_tuple() for b in o['bbox']]
             z_depth.append(pixel_coords[2])
         filepath = str(scene_root / '{}.png'.format(img_idx))
@@ -353,8 +326,8 @@ def render_scene(args,
         for obj_idx, ((b, c), o, z) in enumerate(objs):
             utils.add_object(*c)
             obj = bpy.context.object
-            filepath = str(
-                scene_root / '{}_{}.png'.format(img_idx, obj_idx + 1))
+            filepath = str(scene_root /
+                           '{}_{}.png'.format(img_idx, obj_idx + 1))
             print(filepath)
 
             obj.cycles_visibility.shadow = 0
@@ -424,15 +397,14 @@ def add_objects(args, num_objects, directions, properties):
 
             # Add object meta info
             objects.append(
-                dict(
-                    shape=data['obj'][1],
-                    size=data['size'][1],
-                    material=data['mat'][1],
-                    location=obj.location,
-                    rotation=data['rotation'],
-                    bbox=obj_boundbox,
-                    cylinder=obj_cylinder,
-                    color=data['color'][1]))
+                dict(shape=data['obj'][1],
+                     size=data['size'][1],
+                     material=data['mat'][1],
+                     location=obj.location,
+                     rotation=data['rotation'],
+                     bbox=obj_boundbox,
+                     cylinder=obj_cylinder,
+                     color=data['color'][1]))
             break
     return True, objects, blender_objects
 
@@ -521,13 +493,12 @@ def add_single_object(positions, directions, color_name_to_rgba,
     mat_name, mat_name_out = random.choice(material_mapping)
 
     # index 0 for blender, index 1 for object meta info
-    return dict(
-        obj=(obj_name, obj_name_out),
-        size=(scale, size_name),
-        mat=(mat_name, mat_name_out),
-        coord=(x, y),
-        rotation=theta,
-        color=(rgba, color_name))
+    return dict(obj=(obj_name, obj_name_out),
+                size=(scale, size_name),
+                mat=(mat_name, mat_name_out),
+                coord=(x, y),
+                rotation=theta,
+                color=(rgba, color_name))
 
 
 def add_lamp_jitter(args):

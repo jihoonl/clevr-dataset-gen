@@ -15,6 +15,16 @@ This is the code used to generate the [CLEVR dataset](http://cs.stanford.edu/peo
 
 Code and pretrained models for the baselines used in the paper [can be found here](https://github.com/facebookresearch/clevr-iep).
 
+# Update Notes
+
+The original code has been updated to generate object masks and center pose of objects like this. You can use this code to generate synthetic dataset for context based object detection and semantic 
+
+<div align="center">
+  <img src="images/example_mask.png" width="800px">
+</div>
+
+# Original
+
 You can use this code to render synthetic images and compositional questions for those images, like this:
 
 <div align="center">
