@@ -21,7 +21,7 @@ import tempfile
 from collections import Counter
 from datetime import datetime as dt
 from pathlib import Path
-from copy import deepcopy
+from copy import deepcopy, copy
 """
 Renders random scenes using Blender, each with with a random number of objects;
 each object has a random size, position, color, and shape. Objects will be
@@ -285,9 +285,6 @@ def render_scene(args,
     if args.export_blend:
         bpy.ops.wm.save_as_mainfile(filepath=str(scene_root / blender_path))
 
-    for obj in bpy.data.objects:
-        print(obj.name)
-
     ##################
     # Generate camera views
     # adopted from https://github.com/loganbruns/clevr-dataset-gen
@@ -322,7 +319,14 @@ def render_scene(args,
             o['location'] = tuple(o['location'])
             o['pixel_coords'] = pixel_coords
             o['bbox'] = [b.to_tuple() for b in o['bbox']]
-        objs_export.sort(key=lambda o: o['pixel_coords'][2])
+
+        colormap, z_sorted_objs = render_masks(scene_root, img_idx, render_args,
+                                               objs_export, blender_objects)
+
+        # objs_export.sort(key=lambda o: o['pixel_coords'][2])
+        objs_export = []
+        for (obj, c), z, o in z_sorted_objs:
+            objs_export.append(o)
 
         export = {}
         export['objects'] = objs_export
@@ -338,11 +342,17 @@ def render_scene(args,
             bpy.data.objects['Camera'].rotation_euler.z,
         ]
 
-        colormap = render_masks(scene_root, img_idx, render_args, objs_export,
-                     blender_objects)
         export['colormap'] = colormap.tolist()
         with open(str(scene_root / meta), 'w') as f:
             json.dump(export, f, indent=2)
+
+
+def convert_to_srgb(val):
+    # convert image pixel values from 8bit to 32bit properly
+    if val <= 0.0031308:
+        return val * 12.92
+    else:
+        return 1.055 * (val**(1.0 / 2.4)) - 0.055
 
 
 def render_masks(scene_root, img_idx, render_args, objs_export,
@@ -360,25 +370,24 @@ def render_masks(scene_root, img_idx, render_args, objs_export,
 
     # Assign colors for each objects
     num_objs = len(objs_export)
-    colormap = np.power(np.linspace(0, 1, num_objs + 2)[1:-1],
-                        2.2)  # To skip 0, and 255
+    colormap = np.linspace(0, 1, num_objs + 2)[1:-1]  # To skip 0, and 255
     old_materials = []
 
     z_depth = []
     for o in objs_export:
         z_depth.append(o['pixel_coords'][2])
-    z_sorted_objs = list(zip(blender_objects, z_depth))
+    z_sorted_objs = list(zip(blender_objects, z_depth, objs_export))
     z_sorted_objs.sort(key=operator.itemgetter(1))
 
-    for i, ((obj, c), z) in enumerate(z_sorted_objs):
+    for i, ((obj, c), z, o) in enumerate(z_sorted_objs):
         old_materials.append(obj.data.materials[0])
         bpy.ops.material.new()
         mat = bpy.data.materials['Material']
-        mat.name = 'Material_%d' % i
+        mat.name = 'shadeless_%d' % i
         mat.diffuse_color = (colormap[i], colormap[i], colormap[i])
         mat.use_shadeless = True
         obj.data.materials[0] = mat
-    bpy.context.scene.update_tag()
+        bpy.context.scene.update_tag()
 
     # Render
     filepath = str(scene_root / '{}_{}.png'.format(img_idx, 'mask'))
@@ -394,7 +403,10 @@ def render_masks(scene_root, img_idx, render_args, objs_export,
     render_args.engine = old_engine
     render_args.use_antialiasing = old_use_antialiasing
     bpy.context.scene.update_tag()
-    return colormap
+
+    # sRGB format conversion to have the same pixel value
+    colormap = np.vectorize(convert_to_srgb)(colormap) * 255
+    return colormap.round().astype(int), z_sorted_objs
 
 
 def render_single(render_args, filepath):
