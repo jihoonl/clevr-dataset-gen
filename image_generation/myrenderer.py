@@ -9,19 +9,18 @@
 
 from __future__ import print_function
 
-import numpy as np
-import operator
 import argparse
 import json
 import math
-import os
+import operator
 import random
 import sys
-import tempfile
-from collections import Counter
+from copy import deepcopy
 from datetime import datetime as dt
 from pathlib import Path
-from copy import deepcopy, copy
+
+import numpy as np
+import panda as pd
 """
 Renders random scenes using Blender, each with with a random number of objects;
 each object has a random size, position, color, and shape. Objects will be
@@ -150,11 +149,11 @@ parser.add_argument(
 
 parser.add_argument(
     '--output_dir',
-    default='../output/',
+    default='output',
     help="The directory where outputs will be stored. It will be " +
     "created if it does not exist.")
 
-parser.add_argument('--export_blend', default=True, type=bool)
+parser.add_argument('--export_blend', default=False, type=bool)
 parser.add_argument(
     '--version',
     default='1.0',
@@ -230,12 +229,13 @@ parser.add_argument(
 
 
 def main(args):
-    prefix = '%s' % (args.filename_prefix)
+    output_dir = Path(args.output_dir)
+    prefix = output_dir / ('%s' % (args.filename_prefix))
 
     properties = utils2.load_property_file(args)
     for i in range(args.num_scenes):
-        scene_root = Path('{}_{}'.format(prefix, str(i)))
-        scene_root.mkdir(exist_ok=True)
+        scene_root = prefix / str(i)
+        scene_root.mkdir(parents=True, exist_ok=True)
 
         num_objects = random.randint(args.min_objects, args.max_objects)
         sequence_length = args.sequence_length
@@ -285,10 +285,10 @@ def render_scene(args,
     if args.export_blend:
         bpy.ops.wm.save_as_mainfile(filepath=str(scene_root / blender_path))
 
-    ##################
+    ########################
     # Generate camera views
     # adopted from https://github.com/loganbruns/clevr-dataset-gen
-    ##################
+    ########################
     r = np.linalg.norm([
         bpy.data.objects['Camera'].location.x,
         bpy.data.objects['Camera'].location.y
@@ -474,7 +474,6 @@ def world_coordinate_bbox(obj, obj_type, local=False):
     from https://blender.stackexchange.com/questions/32283/what-are-all-values-in-bound-box
     """
     local_coords = obj.bound_box[:]
-    location = obj.location
     om = obj.matrix_world
 
     worldify = lambda p: om * Vector(p[:])
