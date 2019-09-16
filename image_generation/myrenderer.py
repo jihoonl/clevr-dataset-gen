@@ -18,9 +18,9 @@ import sys
 from copy import deepcopy
 from datetime import datetime as dt
 from pathlib import Path
+import pickle
 
 import numpy as np
-import panda as pd
 """
 Renders random scenes using Blender, each with with a random number of objects;
 each object has a random size, position, color, and shape. Objects will be
@@ -95,7 +95,10 @@ parser.add_argument('--sequence_length',
                     default=1,
                     type=int,
                     help="The maximum number of images to place in each scene")
-
+parser.add_argument('--topview_z',
+                    default=15.0,
+                    type=float,
+                    help="The height of topview camera")
 # Settings for objects
 parser.add_argument('--min_objects',
                     default=3,
@@ -286,7 +289,25 @@ def render_scene(args,
         bpy.ops.wm.save_as_mainfile(filepath=str(scene_root / blender_path))
 
     ########################
-    # Generate camera views
+    # Generate top camera views
+    ########################
+    camera = bpy.data.objects['Camera']
+    orig_cam = dict(x=camera.location.x,
+                    y=camera.location.y,
+                    z=camera.location.z)
+
+    camera.location.x = 0.0
+    camera.location.y = 0.0
+    camera.location.z = args.topview_z
+    objs_export = deepcopy(objects)
+    render_one_view(scene_root, 'topview', render_args, objs_export,
+                    blender_objects)
+    camera.location.x = orig_cam['x']
+    camera.location.y = orig_cam['y']
+    camera.location.z = orig_cam['z']
+
+    ########################
+    # Generate rotating camera views
     # adopted from https://github.com/loganbruns/clevr-dataset-gen
     ########################
     r = np.linalg.norm([
@@ -296,55 +317,60 @@ def render_scene(args,
 
     delta_radians = 2 * np.pi / sequence_length
     theta = 0.
-
     # Record data about the object in the scene data structure
     for img_idx in range(sequence_length):
-        meta = '{}.json'.format(img_idx)
         objs_export = deepcopy(objects)
         camera = bpy.data.objects['Camera']
-        bpy.data.objects['Camera'].location.x = r * np.cos(theta)
-        bpy.data.objects['Camera'].location.y = r * np.sin(theta)
-        bpy.data.objects['Camera'].rotation_euler.z += delta_radians
+        camera.location.x = r * np.cos(theta)
+        camera.location.y = r * np.sin(theta)
+        camera.rotation_euler.z += delta_radians
         for i in range(3):
             camera.location[i] += rand(args.camera_jitter)
 
+        render_one_view(scene_root, img_idx, render_args, objs_export,
+                        blender_objects)
         theta += delta_radians
-        bpy.context.scene.update_tag()
-        filepath = str(scene_root / '{}.png'.format(img_idx))
-        render_single(render_args, filepath)
 
-        for o in objs_export:
-            pixel_coords = utils.get_camera_coords(bpy.data.objects['Camera'],
-                                                   o['location'])
-            o['location'] = tuple(o['location'])
-            o['pixel_coords'] = pixel_coords
-            o['bbox'] = [b.to_tuple() for b in o['bbox']]
 
-        colormap, z_sorted_objs = render_masks(scene_root, img_idx, render_args,
-                                               objs_export, blender_objects)
+def render_one_view(scene_root, img_idx, render_args, objs_export,
+                    blender_objects):
+    bpy.context.scene.update_tag()
+    meta = '{}.json'.format(img_idx)
+    filepath = str(scene_root / '{}.png'.format(img_idx))
+    render_single(render_args, filepath)
 
-        # objs_export.sort(key=lambda o: o['pixel_coords'][2])
-        objs_export = []
-        for (obj, c), z, o in z_sorted_objs:
-            objs_export.append(o)
+    for o in objs_export:
+        pixel_coords = utils.get_camera_coords(bpy.data.objects['Camera'],
+                                               o['location'])
+        o['location'] = tuple(o['location'])
+        o['pixel_coords'] = pixel_coords
 
-        export = {}
-        export['objects'] = objs_export
-        export['camera'] = {}
-        export['camera']['location'] = [
-            bpy.data.objects['Camera'].location.x,
-            bpy.data.objects['Camera'].location.y,
-            bpy.data.objects['Camera'].location.z
-        ]
-        export['camera']['rotation'] = [
-            bpy.data.objects['Camera'].rotation_euler.x,
-            bpy.data.objects['Camera'].rotation_euler.y,
-            bpy.data.objects['Camera'].rotation_euler.z,
-        ]
+    colormap, z_sorted_objs = render_masks(scene_root, img_idx, render_args,
+                                           objs_export, blender_objects)
 
-        export['colormap'] = colormap.tolist()
-        with open(str(scene_root / meta), 'w') as f:
-            json.dump(export, f, indent=2)
+    # objs_export.sort(key=lambda o: o['pixel_coords'][2])
+    objs_export = []
+    for (obj, c), z, o in z_sorted_objs:
+        del o['bbox']
+        objs_export.append(o)
+
+    export = {}
+    export['objects'] = objs_export
+    export['camera'] = {}
+    export['camera']['location'] = [
+        bpy.data.objects['Camera'].location.x,
+        bpy.data.objects['Camera'].location.y,
+        bpy.data.objects['Camera'].location.z
+    ]
+    export['camera']['rotation'] = [
+        bpy.data.objects['Camera'].rotation_euler.x,
+        bpy.data.objects['Camera'].rotation_euler.y,
+        bpy.data.objects['Camera'].rotation_euler.z,
+    ]
+
+    export['colormap'] = colormap.tolist()
+    with open(str(scene_root / meta), 'w') as f:
+        json.dump(export, f, indent=2)
 
 
 def convert_to_srgb(val):
