@@ -347,6 +347,7 @@ def render_scene(args,
 
     scene = {'world': world, 'topview': topview, 'views': views}
 
+    # Replace pickle later
     with open(str(scene_path), 'wb') as f:
         pickle.dump(scene, f, pickle.HIGHEST_PROTOCOL)
 
@@ -450,8 +451,8 @@ def render_single(render_args):
         except Exception as e:
             print(e)
     img = bpy.data.images.load(temppath)
-    os.remove(temppath)
     np_img = np.array(list(img.pixels)).reshape(img.size[0], img.size[1], 4)
+    os.remove(temppath)
     return np_img[::-1, :, :3]
 
 
