@@ -283,11 +283,15 @@ def render_scene(args,
     }
     num_objs = len(objects)
     colormap = np.linspace(0, 1, num_objs + 2)[1:-1]  # To skip 0, and 255
+    colormap_export = np.vectorize(convert_to_srgb)(
+        colormap)  # subtracting background color 64
+    colormap_export = (colormap_export * 255).round().astype(np.uint8) - 64
 
     # Add index and assign colormask value
     for i, o in enumerate(world['objects']):
         o['index'] = i
-        o['mask_color'] = colormap[i]
+        o['mask_color_render'] = colormap[i]
+        o['mask_color'] = colormap_export[i]
 
     if args.export_blend:
         blender_path = scene_root / '{}.blend'.format(scene_idx)
@@ -338,12 +342,15 @@ def render_scene(args,
         theta += delta_radians
         views.append(view)
 
-    colormap_export = np.vectorize(convert_to_srgb)(colormap) - (
-        64 / 255)  # subtracting background color 64
+    colormap_export = np.vectorize(convert_to_srgb)(
+        colormap)  # subtracting background color 64
+    colormap_export = (colormap_export * 255).round().astype(np.uint8) - 64
+
     for i, o in enumerate(world['objects']):
         o['location'] = tuple(o['location'])
         o['bbox'] = [b.to_tuple() for b in o['bbox']]
-        o['mask_color'] = colormap_export[i]
+        del o['mask_color_render']
+        del o['mask_color']
 
     scene = {'world': world, 'topview': topview, 'views': views}
 
@@ -366,6 +373,12 @@ def render_one_view(scene_root, img_idx, render_args, objs_export,
 
     mask = render_masks(scene_root, img_idx, render_args, objs_export,
                         blender_objects)
+    mask = np.stack([mask] * len(objs_export))
+    for m, o in zip(mask, objs_export):
+        m[m != o['mask_color']] = 0
+        m[m == o['mask_color']] = 255
+        del o['mask_color_render']
+        del o['mask_color']
 
     export = {}
     export['image'] = img
@@ -413,15 +426,16 @@ def render_masks(scene_root, img_idx, render_args, objs_export,
         bpy.ops.material.new()
         mat = bpy.data.materials['Material']
         mat.name = 'shadeless_%d' % i
-        mat.diffuse_color = (o['mask_color'], o['mask_color'], o['mask_color'])
+        mat.diffuse_color = (o['mask_color_render'], o['mask_color_render'],
+                             o['mask_color_render'])
         mat.use_shadeless = True
         obj.data.materials[0] = mat
         bpy.context.scene.update_tag()
 
     # Render
     # filepath = str(scene_root / '{}_{}.png'.format(img_idx, 'mask'))
-    mask_img = render_single(render_args) - (64 / 255
-                                            )  # Subtracting background color 64
+    mask_img = render_single(
+        render_args) - 64  # Subtracting background color 64
 
     # Revert all changes back to original
     for mat, (obj, c) in zip(old_materials, blender_objects):
@@ -453,7 +467,7 @@ def render_single(render_args):
     img = bpy.data.images.load(temppath)
     np_img = np.array(list(img.pixels)).reshape(img.size[0], img.size[1], 4)
     os.remove(temppath)
-    return np_img[::-1, :, :3]
+    return (np_img[::-1, :, :3] * 255).astype(np.uint8)
 
 
 def add_objects(args, num_objects, directions, properties):
