@@ -238,7 +238,6 @@ def main(args):
     output_dir.mkdir(exist_ok=True)
 
     properties = utils2.load_property_file(args)
-
     dir_idx = 0
     scene_root = output_dir / str(dir_idx)
     scene_root.mkdir(exist_ok=True)
@@ -382,7 +381,6 @@ def render_one_view(scene_root, img_idx, render_args, objs_export,
 
     mask = render_masks(scene_root, img_idx, render_args, objs_export,
                         blender_objects)
-    # mask = np.stack([mask] * len(objs_export))
     for m, o in zip(mask, objs_export):
         m[m != o['mask_color']] = 0
         m[m == o['mask_color']] = 255
