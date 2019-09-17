@@ -1,5 +1,18 @@
 # CLEVR Dataset Generation
 
+# Update Notes
+
+CEVR-Context
+
+The original code has been updated to generate object masks and center pose of objects like this. You can use this code to generate synthetic dataset for context based object detection and segmentation tasks
+
+<div align="center">
+  <img src="images/example_mask.png" width="800px">
+</div>
+
+
+# Original
+
 This is the code used to generate the [CLEVR dataset](http://cs.stanford.edu/people/jcjohns/clevr/) as described in the paper:
 
 **[CLEVR: A Diagnostic Dataset for Compositional Language and Elementary Visual Reasoning](http://cs.stanford.edu/people/jcjohns/clevr/)**
@@ -14,17 +27,6 @@ This is the code used to generate the [CLEVR dataset](http://cs.stanford.edu/peo
  Presented at [CVPR 2017](http://cvpr2017.thecvf.com/)
 
 Code and pretrained models for the baselines used in the paper [can be found here](https://github.com/facebookresearch/clevr-iep).
-
-# Update Notes
-
-The original code has been updated to generate object masks and center pose of objects like this. You can use this code to generate synthetic dataset for context based object detection and segmentation tasks
-
-<div align="center">
-  <img src="images/example_mask.png" width="800px">
-</div>
-
-# Original
-
 You can use this code to render synthetic images and compositional questions for those images, like this:
 
 <div align="center">
