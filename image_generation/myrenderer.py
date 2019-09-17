@@ -14,13 +14,15 @@ import json
 import math
 import operator
 import random
+import os
 import sys
 from copy import deepcopy
 from datetime import datetime as dt
 from pathlib import Path
+import pickle
+import tempfile
 
 import numpy as np
-import panda as pd
 """
 Renders random scenes using Blender, each with with a random number of objects;
 each object has a random size, position, color, and shape. Objects will be
@@ -95,7 +97,10 @@ parser.add_argument('--sequence_length',
                     default=1,
                     type=int,
                     help="The maximum number of images to place in each scene")
-
+parser.add_argument('--topview_z',
+                    default=15.0,
+                    type=float,
+                    help="The height of topview camera")
 # Settings for objects
 parser.add_argument('--min_objects',
                     default=3,
@@ -230,19 +235,17 @@ parser.add_argument(
 
 def main(args):
     output_dir = Path(args.output_dir)
-    prefix = output_dir / ('%s' % (args.filename_prefix))
+    output_dir.mkdir(exist_ok=True)
 
     properties = utils2.load_property_file(args)
     for i in range(args.num_scenes):
-        scene_root = prefix / str(i)
-        scene_root.mkdir(parents=True, exist_ok=True)
-
         num_objects = random.randint(args.min_objects, args.max_objects)
         sequence_length = args.sequence_length
         render_scene(args,
                      num_objects=num_objects,
                      sequence_length=sequence_length,
-                     scene_root=scene_root,
+                     scene_root=output_dir,
+                     scene_idx=i,
                      properties=properties)
 
 
@@ -254,9 +257,9 @@ def render_scene(args,
                  num_objects=1,
                  sequence_length=1,
                  scene_root='.',
+                 scene_idx=0,
                  properties=None):
-    scene_path = 'scene.json'
-    blender_path = 'scene.blend'
+    scene_path = scene_root / '{}.pkl'.format(scene_idx)
 
     # Prepare blender world
 
@@ -275,18 +278,45 @@ def render_scene(args,
     while not success:
         success, objects, blender_objects = add_objects(args, num_objects,
                                                         directions, properties)
-    scene_struct = {'objects': deepcopy(objects), 'directions': directions}
-    for o in scene_struct['objects']:
-        o['location'] = tuple(o['location'])
-        o['bbox'] = [b.to_tuple() for b in o['bbox']]
-    with open(str(scene_root / scene_path), 'w') as f:
-        json.dump(scene_struct, f)
+    world = {
+        'objects': deepcopy(objects),
+    }
+    num_objs = len(objects)
+    colormap = np.linspace(0, 1, num_objs + 2)[1:-1]  # To skip 0, and 255
+    colormap_export = np.vectorize(convert_to_srgb)(
+        colormap)  # subtracting background color 64
+    colormap_export = (colormap_export * 255).round().astype(np.uint8) - 64
+
+    # Add index and assign colormask value
+    for i, o in enumerate(world['objects']):
+        o['index'] = i
+        o['mask_color_render'] = colormap[i]
+        o['mask_color'] = colormap_export[i]
 
     if args.export_blend:
-        bpy.ops.wm.save_as_mainfile(filepath=str(scene_root / blender_path))
+        blender_path = scene_root / '{}.blend'.format(scene_idx)
+        bpy.ops.wm.save_as_mainfile(filepath=str(blender_path))
 
     ########################
-    # Generate camera views
+    # Generate top camera views
+    ########################
+    camera = bpy.data.objects['Camera']
+    orig_cam = dict(x=camera.location.x,
+                    y=camera.location.y,
+                    z=camera.location.z)
+
+    camera.location.x = 0.0
+    camera.location.y = 0.0
+    camera.location.z = args.topview_z
+    objs_export = deepcopy(world['objects'])
+    topview = render_one_view(scene_root, 'topview', render_args, objs_export,
+                              blender_objects)
+    camera.location.x = orig_cam['x']
+    camera.location.y = orig_cam['y']
+    camera.location.z = orig_cam['z']
+
+    ########################
+    # Generate rotating camera views
     # adopted from https://github.com/loganbruns/clevr-dataset-gen
     ########################
     r = np.linalg.norm([
@@ -296,55 +326,76 @@ def render_scene(args,
 
     delta_radians = 2 * np.pi / sequence_length
     theta = 0.
-
     # Record data about the object in the scene data structure
+    views = []
     for img_idx in range(sequence_length):
-        meta = '{}.json'.format(img_idx)
-        objs_export = deepcopy(objects)
+        objs_export = deepcopy(world['objects'])
         camera = bpy.data.objects['Camera']
-        bpy.data.objects['Camera'].location.x = r * np.cos(theta)
-        bpy.data.objects['Camera'].location.y = r * np.sin(theta)
-        bpy.data.objects['Camera'].rotation_euler.z += delta_radians
+        camera.location.x = r * np.cos(theta)
+        camera.location.y = r * np.sin(theta)
+        camera.rotation_euler.z += delta_radians
         for i in range(3):
             camera.location[i] += rand(args.camera_jitter)
 
+        view = render_one_view(scene_root, img_idx, render_args, objs_export,
+                               blender_objects)
         theta += delta_radians
-        bpy.context.scene.update_tag()
-        filepath = str(scene_root / '{}.png'.format(img_idx))
-        render_single(render_args, filepath)
+        views.append(view)
 
-        for o in objs_export:
-            pixel_coords = utils.get_camera_coords(bpy.data.objects['Camera'],
-                                                   o['location'])
-            o['location'] = tuple(o['location'])
-            o['pixel_coords'] = pixel_coords
-            o['bbox'] = [b.to_tuple() for b in o['bbox']]
+    colormap_export = np.vectorize(convert_to_srgb)(
+        colormap)  # subtracting background color 64
+    colormap_export = (colormap_export * 255).round().astype(np.uint8) - 64
 
-        colormap, z_sorted_objs = render_masks(scene_root, img_idx, render_args,
-                                               objs_export, blender_objects)
+    for i, o in enumerate(world['objects']):
+        o['location'] = tuple(o['location'])
+        o['bbox'] = [b.to_tuple() for b in o['bbox']]
+        del o['mask_color_render']
+        del o['mask_color']
 
-        # objs_export.sort(key=lambda o: o['pixel_coords'][2])
-        objs_export = []
-        for (obj, c), z, o in z_sorted_objs:
-            objs_export.append(o)
+    scene = {'world': world, 'topview': topview, 'views': views}
 
-        export = {}
-        export['objects'] = objs_export
-        export['camera'] = {}
-        export['camera']['location'] = [
-            bpy.data.objects['Camera'].location.x,
-            bpy.data.objects['Camera'].location.y,
-            bpy.data.objects['Camera'].location.z
-        ]
-        export['camera']['rotation'] = [
-            bpy.data.objects['Camera'].rotation_euler.x,
-            bpy.data.objects['Camera'].rotation_euler.y,
-            bpy.data.objects['Camera'].rotation_euler.z,
-        ]
+    # Replace pickle later
+    with open(str(scene_path), 'wb') as f:
+        pickle.dump(scene, f, pickle.HIGHEST_PROTOCOL)
 
-        export['colormap'] = colormap.tolist()
-        with open(str(scene_root / meta), 'w') as f:
-            json.dump(export, f, indent=2)
+
+def render_one_view(scene_root, img_idx, render_args, objs_export,
+                    blender_objects):
+    bpy.context.scene.update_tag()
+    img = render_single(render_args)
+
+    for o in objs_export:
+        pixel_coords = utils.get_camera_coords(bpy.data.objects['Camera'],
+                                               o['location'])
+        o['location'] = tuple(o['location'])
+        o['pixel_coords'] = pixel_coords
+        del o['bbox']
+
+    mask = render_masks(scene_root, img_idx, render_args, objs_export,
+                        blender_objects)
+    mask = np.stack([mask] * len(objs_export))
+    for m, o in zip(mask, objs_export):
+        m[m != o['mask_color']] = 0
+        m[m == o['mask_color']] = 255
+        del o['mask_color_render']
+        del o['mask_color']
+
+    export = {}
+    export['image'] = img
+    export['mask'] = mask
+    export['objects'] = objs_export
+    export['camera'] = {}
+    export['camera']['location'] = [
+        bpy.data.objects['Camera'].location.x,
+        bpy.data.objects['Camera'].location.y,
+        bpy.data.objects['Camera'].location.z
+    ]
+    export['camera']['rotation'] = [
+        bpy.data.objects['Camera'].rotation_euler.x,
+        bpy.data.objects['Camera'].rotation_euler.y,
+        bpy.data.objects['Camera'].rotation_euler.z,
+    ]
+    return export
 
 
 def convert_to_srgb(val):
@@ -369,29 +420,22 @@ def render_masks(scene_root, img_idx, render_args, objs_export,
     utils.set_layer(bpy.data.objects['Ground'], 2)
 
     # Assign colors for each objects
-    num_objs = len(objs_export)
-    colormap = np.linspace(0, 1, num_objs + 2)[1:-1]  # To skip 0, and 255
     old_materials = []
-
-    z_depth = []
-    for o in objs_export:
-        z_depth.append(o['pixel_coords'][2])
-    z_sorted_objs = list(zip(blender_objects, z_depth, objs_export))
-    z_sorted_objs.sort(key=operator.itemgetter(1))
-
-    for i, ((obj, c), z, o) in enumerate(z_sorted_objs):
+    for i, ((obj, c), o) in enumerate(zip(blender_objects, objs_export)):
         old_materials.append(obj.data.materials[0])
         bpy.ops.material.new()
         mat = bpy.data.materials['Material']
         mat.name = 'shadeless_%d' % i
-        mat.diffuse_color = (colormap[i], colormap[i], colormap[i])
+        mat.diffuse_color = (o['mask_color_render'], o['mask_color_render'],
+                             o['mask_color_render'])
         mat.use_shadeless = True
         obj.data.materials[0] = mat
         bpy.context.scene.update_tag()
 
     # Render
-    filepath = str(scene_root / '{}_{}.png'.format(img_idx, 'mask'))
-    render_single(render_args, filepath)
+    # filepath = str(scene_root / '{}_{}.png'.format(img_idx, 'mask'))
+    mask_img = render_single(
+        render_args) - 64  # Subtracting background color 64
 
     # Revert all changes back to original
     for mat, (obj, c) in zip(old_materials, blender_objects):
@@ -404,24 +448,29 @@ def render_masks(scene_root, img_idx, render_args, objs_export,
     render_args.use_antialiasing = old_use_antialiasing
     bpy.context.scene.update_tag()
 
-    # sRGB format conversion to have the same pixel value
-    colormap = np.vectorize(convert_to_srgb)(colormap) * 255
-    return colormap.round().astype(int), z_sorted_objs
+    return mask_img
 
 
-def render_single(render_args, filepath):
-    render_args.filepath = filepath
+def render_single(render_args):
+    if not hasattr(render_single, 'temppath'):
+        f, temppath = tempfile.mkstemp(suffix='.png')
+        render_single.temppath = temppath
+    temppath = render_single.temppath
 
+    render_args.filepath = temppath
     while True:
         try:
             bpy.ops.render.render(write_still=True)
             break
         except Exception as e:
             print(e)
+    img = bpy.data.images.load(temppath)
+    np_img = np.array(list(img.pixels)).reshape(img.size[0], img.size[1], 4)
+    os.remove(temppath)
+    return (np_img[::-1, :, :3] * 255).astype(np.uint8)
 
 
 def add_objects(args, num_objects, directions, properties):
-
     positions = []
     objects = []
     blender_objects = []
