@@ -147,16 +147,16 @@ parser.add_argument('--num_scenes',
                     default=1,
                     type=int,
                     help="The number of scenes to render")
-parser.add_argument(
-    '--filename_prefix',
-    default='CLEVR',
-    help="This prefix will be prepended to the rendered images and JSON scenes")
 
 parser.add_argument(
     '--output_dir',
     default='output',
     help="The directory where outputs will be stored. It will be " +
     "created if it does not exist.")
+parser.add_argument('--num_scenes_per_dir',
+                    default=1000,
+                    type=int,
+                    help='Number of scenes to keep in the same directory')
 
 parser.add_argument('--export_blend', default=False, type=bool)
 parser.add_argument(
@@ -238,14 +238,23 @@ def main(args):
     output_dir.mkdir(exist_ok=True)
 
     properties = utils2.load_property_file(args)
+
+    dir_idx = 0
+    scene_root = output_dir / str(dir_idx)
+    scene_root.mkdir(exist_ok=True)
     for i in range(args.num_scenes):
+        scene_idx = i % args.num_scenes_per_dir
+        if scene_idx == 0:
+            scene_root = output_dir / str(dir_idx)
+            scene_root.mkdir(exist_ok=True)
+            dir_idx += 1
         num_objects = random.randint(args.min_objects, args.max_objects)
         sequence_length = args.sequence_length
         render_scene(args,
                      num_objects=num_objects,
                      sequence_length=sequence_length,
-                     scene_root=output_dir,
-                     scene_idx=i,
+                     scene_root=scene_root,
+                     scene_idx=scene_idx,
                      properties=properties)
 
 
@@ -350,7 +359,7 @@ def render_scene(args,
         o['location'] = tuple(o['location'])
         o['bbox'] = [b.to_tuple() for b in o['bbox']]
         del o['mask_color_render']
-        del o['mask_color']
+        o['mask_color']
 
     scene = {'world': world, 'topview': topview, 'views': views}
 
@@ -373,12 +382,12 @@ def render_one_view(scene_root, img_idx, render_args, objs_export,
 
     mask = render_masks(scene_root, img_idx, render_args, objs_export,
                         blender_objects)
-    mask = np.stack([mask] * len(objs_export))
+    # mask = np.stack([mask] * len(objs_export))
     for m, o in zip(mask, objs_export):
         m[m != o['mask_color']] = 0
         m[m == o['mask_color']] = 255
         del o['mask_color_render']
-        del o['mask_color']
+        o['mask_color']
 
     export = {}
     export['image'] = img
@@ -436,6 +445,7 @@ def render_masks(scene_root, img_idx, render_args, objs_export,
     # filepath = str(scene_root / '{}_{}.png'.format(img_idx, 'mask'))
     mask_img = render_single(
         render_args) - 64  # Subtracting background color 64
+    mask_img = mask_img[:, :, 0]  # making as single channel image
 
     # Revert all changes back to original
     for mat, (obj, c) in zip(old_materials, blender_objects):
