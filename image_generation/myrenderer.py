@@ -182,11 +182,11 @@ parser.add_argument(
     "You must have an NVIDIA GPU with the CUDA toolkit installed for " +
     "to work.")
 parser.add_argument('--width',
-                    default=240,
+                    default=128,
                     type=int,
                     help="The width (in pixels) for the rendered images")
 parser.add_argument('--height',
-                    default=240,
+                    default=128,
                     type=int,
                     help="The height (in pixels) for the rendered images")
 parser.add_argument(
@@ -235,7 +235,7 @@ parser.add_argument(
 
 def main(args):
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(exist_ok=True, parents=True)
 
     properties = utils2.load_property_file(args)
     dir_idx = 0
@@ -397,11 +397,16 @@ def render_one_view(scene_root, img_idx, render_args, objs_export,
         bpy.data.objects['Camera'].location.y,
         bpy.data.objects['Camera'].location.z
     ]
-    export['camera']['rotation'] = [
-        bpy.data.objects['Camera'].rotation_euler.x,
-        bpy.data.objects['Camera'].rotation_euler.y,
-        bpy.data.objects['Camera'].rotation_euler.z,
+
+    cam = bpy.data.objects['Camera']
+    cam_up = cam.matrix_world.to_quaternion() * Vector((0.0, 1.0, 0.0))
+    cam_direction = cam.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
+    cam_up.normalized()
+    cam_direction = cam_direction.normalized()
+    export['camera']['lookat'] = [
+        cam_direction.x, cam_direction.y, cam_direction.z
     ]
+    export['camera']['up'] = [cam_up.x, cam_up.y, cam_up.z]
     return export
 
 
