@@ -382,10 +382,7 @@ def render_one_view(scene_root, img_idx, render_args, objs_export,
     mask = render_masks(scene_root, img_idx, render_args, objs_export,
                         blender_objects)
     for m, o in zip(mask, objs_export):
-        m[m != o['mask_color']] = 0
-        m[m == o['mask_color']] = 255
         del o['mask_color_render']
-        o['mask_color']
 
     export = {}
     export['image'] = img
